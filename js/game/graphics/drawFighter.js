@@ -1,22 +1,38 @@
 import { GAME } from "../core/config.js";
-export function drawFighter(ctx, f, sprites, shadows, debug = false, forceAnim) {
+export function drawFighter(ctx, f, sprites, shadows, debug = false, forceAnim, renderAlpha = 1, gfx = {}) {
+    const rawAlpha = Math.max(0, Math.min(1, renderAlpha));
+    // Physics stays fixed at 60 Hz. Only the render pose is eased between the
+    // previous/current simulation states, so hitboxes and frame data never move.
+    const alpha = gfx.motionSmoothing === false ? rawAlpha : smoothstep(rawAlpha);
+    const rx = lerp(f.prevX ?? f.x, f.x, alpha);
+    const ry = lerp(f.prevY ?? f.y, f.y, alpha);
+    const renderFrame = f.attackFrame + alpha;
+    const renderTime = f.stateTime + alpha * GAME.FRAME;
     const anim = forceAnim || mapAnim(f);
     if (shadows)
-        drawGroundShadow(ctx, f);
-    const visual = visualOffset(f);
+        drawGroundShadow(ctx, f, rx, ry);
+    const visual = visualMotion(f, renderFrame, renderTime);
+    const pivotX = rx + f.w / 2;
+    const pivotY = ry + f.h;
     ctx.save();
+    ctx.translate(pivotX, pivotY);
     ctx.translate(visual.x, visual.y);
-    const drawn = sprites?.draw(ctx, anim, f.x, f.y, f.w, f.h, f.facing, {
-        time: f.stateTime,
+    ctx.rotate(visual.rotation);
+    ctx.scale(visual.scaleX, visual.scaleY);
+    ctx.translate(-pivotX, -pivotY);
+    drawAfterimages(ctx, f, sprites, anim, rx, ry, renderTime, renderFrame, gfx.motionTrails === false ? 0 : visual.trail, gfx);
+    const drawn = sprites?.draw(ctx, anim, rx, ry, f.w, f.h, f.facing, {
+        time: renderTime,
         attack: f.attack,
-        attackFrame: f.attackFrame,
+        attackFrame: renderFrame,
         squash: f.impactSquash,
+        frameBlend: gfx.frameBlend !== false,
     });
     if (!drawn) {
         ctx.save();
-        ctx.translate(f.x + f.w / 2, f.y + f.h);
+        ctx.translate(rx + f.w / 2, ry + f.h);
         const squash = f.impactSquash;
-        ctx.scale(f.facing * f.scaleX * (1 + squash * 0.18), f.scaleY * (1 - squash * 0.2));
+        ctx.scale(f.facing * (1 + squash * 0.18), 1 - squash * 0.2);
         ctx.translate(-f.w / 2, -f.h);
         if (f.state === "ko" || f.state === "knockdown") {
             ctx.translate(18, 135);
@@ -58,37 +74,164 @@ export function drawFighter(ctx, f, sprites, shadows, debug = false, forceAnim) 
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
         ctx.fillStyle = `rgba(255,240,230,${Math.min(0.55, f.hitFlash * 4)})`;
-        ctx.fillRect(f.x + 8, f.y + 4, f.w - 16, f.h - 8);
+        ctx.fillRect(rx + 8, ry + 4, f.w - 16, f.h - 8);
         ctx.restore();
     }
+    drawPowerAura(ctx, f, rx, ry, renderTime);
     ctx.restore();
     if (debug)
         sprites?.debug(ctx, f.x, f.y, f.w, f.h, f.facing);
 }
-function visualOffset(f) {
+function visualMotion(f, attackFrame, time) {
+    const p = f.data.presentation ?? {};
+    const anticipation = p.anticipation ?? 1;
+    const snap = p.snap ?? 1;
+    const trailBase = p.trail ?? 0;
+    const bob = p.idleBob ?? 0.8;
+    let x = 0, y = 0, rotation = 0, scaleX = 1, scaleY = 1, trail = 0;
     if (f.state === "hit") {
-        const decay = Math.max(0, 1 - f.stateTime * 7);
-        return {
-            x: -f.facing * (5 + Math.sin(f.stateTime * 70) * 3) * decay,
-            y: Math.sin(f.stateTime * 52) * 2.5 * decay,
-        };
+        const decay = Math.max(0, 1 - time * 7);
+        x = -f.facing * (5 + Math.sin(time * 70) * 3) * decay;
+        y = Math.sin(time * 52) * 2.5 * decay;
+        rotation = -f.facing * 0.025 * decay;
     }
-    if (f.state === "attack" && f.attack) {
-        const total = Math.max(1, f.attack.startup + f.attack.active);
-        const p = Math.min(1, f.attackFrame / total);
-        const weight = f.attack.type === "super" ? 5 : f.attack.button === "heavy" || f.attack.button === "kickHeavy" ? 3.5 : 1.5;
-        return { x: f.facing * Math.sin(p * Math.PI) * weight, y: 0 };
+    else if ((f.state === "attack" || f.state === "throw" || f.state === "counter") && f.attack) {
+        const a = f.attack;
+        const startup = Math.max(1, a.startup);
+        const active = Math.max(1, a.active);
+        const recovery = Math.max(1, a.recovery);
+        if (attackFrame < startup) {
+            const t = easeOutCubic(Math.max(0, attackFrame / startup));
+            x = -f.facing * 5.5 * anticipation * t;
+            rotation = -f.facing * 0.035 * anticipation * t;
+            scaleX = 1 - 0.025 * anticipation * t;
+            scaleY = 1 + 0.018 * anticipation * t;
+        }
+        else if (attackFrame < startup + active) {
+            const t = Math.max(0, (attackFrame - startup) / active);
+            const strike = 1 - Math.min(1, t * 0.85);
+            x = f.facing * (7 + (a.advance ? 3 : 0)) * snap * strike;
+            rotation = f.facing * 0.025 * snap * strike;
+            scaleX = 1 + 0.045 * snap * strike;
+            scaleY = 1 - 0.028 * snap * strike;
+            trail = trailBase * (a.type === "super" ? 1.35 : a.type === "special" ? 1 : 0.48);
+        }
+        else {
+            const t = Math.max(0, Math.min(1, (attackFrame - startup - active) / recovery));
+            const settle = (1 - t) * (1 - t);
+            x = f.facing * 4 * snap * settle;
+            rotation = f.facing * 0.012 * snap * settle;
+            trail = trailBase * 0.18 * settle;
+        }
+        if (a.grab)
+            rotation *= 0.5;
+        if (a.projectile)
+            x *= 0.5;
+        if (a.antiAir)
+            y -= Math.sin(Math.min(1, attackFrame / Math.max(1, startup + active)) * Math.PI) * 4;
     }
-    return { x: 0, y: 0 };
+    else if (f.state === "dash") {
+        const pulse = 0.5 + 0.5 * Math.sin(time * 18);
+        x = f.facing * (2.5 + pulse * 1.4);
+        y = Math.sin(time * 22) * 1.3;
+        rotation = f.facing * 0.012 * pulse;
+        scaleX = 1.025 + pulse * 0.012;
+        scaleY = 0.985 - pulse * 0.008;
+        trail = trailBase * 0.9;
+    }
+    else if (f.state === "jump") {
+        const rising = Math.max(-1, Math.min(1, -(f.vy ?? 0) / 650));
+        y = -Math.abs(rising) * 2.2;
+        rotation = f.facing * rising * 0.035;
+        scaleX = 1 - Math.abs(rising) * 0.018;
+        scaleY = 1 + Math.abs(rising) * 0.025;
+    }
+    else if (f.state === "crouch") {
+        scaleX = 1.035;
+        scaleY = 0.965;
+        y = 2.2;
+    }
+    else if (f.state === "block") {
+        const brace = 0.5 + 0.5 * Math.sin(time * 11);
+        x = -f.facing * (1.2 + brace * 0.8);
+        rotation = -f.facing * 0.012;
+        scaleX = 0.99;
+        scaleY = 1.008;
+    }
+    else if (f.state === "wakeup") {
+        const t = easeOutCubic(Math.min(1, time / 0.34));
+        y = (1 - t) * 7;
+        rotation = -f.facing * (1 - t) * 0.035;
+        scaleX = 1.04 - t * 0.04;
+        scaleY = 0.94 + t * 0.06;
+    }
+    else if (f.state === "idle" || f.state === "walk" || f.state === "walkBack") {
+        const walk = f.state !== "idle";
+        y = Math.sin(time * (walk ? 9.5 : 5.2)) * bob;
+        if (walk) {
+            const step = Math.sin(time * 9.5);
+            rotation = f.facing * step * 0.006;
+            scaleY = 1 + Math.abs(step) * 0.006;
+        }
+    }
+    if (f.hasStatus?.("bloodRush")) {
+        scaleX *= 1.01 + Math.sin(time * 13) * 0.008;
+        scaleY *= 1.01 - Math.sin(time * 13) * 0.006;
+        trail = Math.max(trail, 0.16);
+    }
+    return { x, y, rotation, scaleX, scaleY, trail };
 }
-function drawGroundShadow(ctx, f) {
-    const height = Math.max(0, GAME.FLOOR - (f.y + f.h));
+function drawAfterimages(ctx, f, sprites, anim, x, y, time, attackFrame, amount, gfx = {}) {
+    if (!sprites || amount <= 0.04)
+        return;
+    const copies = amount > 0.5 ? 2 : 1;
+    for (let i = copies; i >= 1; i--) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(0.18, amount * (i === 1 ? 0.22 : 0.13));
+        ctx.globalCompositeOperation = "lighter";
+        ctx.translate(-f.facing * (5 + i * 6) * amount, i * 0.6);
+        sprites.draw(ctx, anim, x, y, f.w, f.h, f.facing, {
+            time: Math.max(0, time - i * 0.025),
+            attack: f.attack,
+            attackFrame: Math.max(0, attackFrame - i * 0.7),
+            squash: 0,
+            frameBlend: gfx.frameBlend !== false,
+        });
+        ctx.restore();
+    }
+}
+function drawPowerAura(ctx, f, x, y, time) {
+    const labels = f.statusLabels?.() ?? [];
+    if (!labels.length)
+        return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.14 + Math.sin(time * 9) * 0.035;
+    ctx.strokeStyle = f.data.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(x + f.w / 2, y + f.h * 0.55, 34 + Math.sin(time * 7) * 2, 72, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+}
+function easeOutCubic(t) {
+    return 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3);
+}
+function smoothstep(t) {
+    const x = Math.max(0, Math.min(1, t));
+    return x * x * (3 - 2 * x);
+}
+function lerp(a, b, t) {
+    return a + (b - a) * t;
+}
+function drawGroundShadow(ctx, f, x = f.x, y = f.y) {
+    const height = Math.max(0, GAME.FLOOR - (y + f.h));
     const air = Math.min(1, height / 260);
     ctx.save();
     ctx.globalAlpha = 0.42 - air * 0.2;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(f.x + f.w / 2, GAME.FLOOR - 4, 31 - air * 11, 8 - air * 2.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + f.w / 2, GAME.FLOOR - 4, 31 - air * 11, 8 - air * 2.5, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 }

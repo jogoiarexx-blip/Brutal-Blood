@@ -17,6 +17,7 @@ import { paletteAt } from "../assets/palettes.js";
 import { availablePalettes } from "../progression/rewards.js";
 import { comboScale, stunScale, COMBO_LIMIT, onHitAdv, onBlockAdv } from "./frameData.js";
 import { drawFightAtmosphere } from "../core/presentation.js";
+import { powerOnAttackStart, powerOnProjectileSpawn, powerBeforeHit, powerAfterHit } from "./Powers.js";
 /** Highs whiff on a crouching body unless the move is an overhead. Lows whiff in the air. Mids hit both. */
 function heightsConnect(att, def) {
     const h = att.attack?.height;
@@ -69,7 +70,7 @@ export class Match {
     projectiles = [];
     training = { infiniteHp: true, infiniteMeter: true, showHitboxes: false, showFrameData: true, cpu: "stand", frameAdvance: false, forceCounter: false };
     lastTrainingDmg = 0;
-    pendingCancel = null;
+    moveBuffer = new Map();
     lastEvent = "";
     eventTime = 0;
     lastScale = 1;
@@ -94,12 +95,14 @@ export class Match {
         this.onMatchEnd = undefined;
         this.onHUD = undefined;
         this.pendingProjectiles.clear();
+        this.moveBuffer.clear();
     }
     scheduleResult(won, delay) {
         this.resultWon = won;
         this.resultDelay = delay;
     }
     attackStarted(f, move) {
+        powerOnAttackStart(this, f, move);
         if (move.type === "super")
             this.armSuperFreeze(f);
         else
@@ -194,7 +197,6 @@ export class Match {
         this.stateTime = 0;
         this.roundOver = false;
         this.hitStop.reset();
-        this.pendingCancel = null;
         this.message = this.mode === "training" ? "TREINO" : `ROUND ${this.round}`;
     }
     resetTransient() {
@@ -202,7 +204,7 @@ export class Match {
         this.buf2.reset();
         this.ai?.reset();
         this.pendingProjectiles.clear();
-        this.pendingCancel = null;
+        this.moveBuffer.clear();
         this.resultDelay = -1;
         this.finishElapsed = 0;
         this.finishName = "";
@@ -289,11 +291,10 @@ export class Match {
             this.hitStop.tick();
             this.runFrozen(dt);
             if (!this.hitStop.frozen)
-                this.flushCancel();
+                this.flushMoveBuffers();
             this.emitHud();
             return;
         }
-        this.flushCancel();
         this.hitStop.decayFlash();
         this.time += dt;
         this.stateTime += dt;
@@ -392,6 +393,7 @@ export class Match {
                 return;
             }
         }
+        this.flushMoveBuffers();
         this.handleHuman(this.p1, "p1", this.buf1);
         if (this.mode === "versus" || (this.mode === "training" && this.recorder.mode !== "idle"))
             this.handleHuman(this.p2, "p2", this.buf2);
@@ -435,27 +437,38 @@ export class Match {
     runFrozen(dt) {
         this.buf1.tick(this.input, "p1", this.p1.facing);
         this.buf2.tick(this.input, "p2", this.p2.facing);
-        this.latchCancel(this.p1, "p1", this.buf1);
+        this.latchBufferedInput(this.p1, "p1", this.buf1);
         if (this.mode === "versus" || this.recorder.mode !== "idle")
-            this.latchCancel(this.p2, "p2", this.buf2);
+            this.latchBufferedInput(this.p2, "p2", this.buf2);
         this.particles.update(dt * 0.22);
         this.camera.update(dt);
     }
-    latchCancel(f, slot, buf) {
+    latchBufferedInput(f, slot, buf) {
         const btn = this.input.peekPressed(slot);
         if (!btn)
             return;
         const move = buf.resolveMove(f.data, btn, !f.grounded, false, getSave().graphics.simplifiedCommands);
-        if (move && f.canCancel(move.id))
-            this.pendingCancel = { fighter: f, move };
+        if (move)
+            this.queueMove(f, move, 8);
     }
-    flushCancel() {
-        const pending = this.pendingCancel;
-        this.pendingCancel = null;
-        if (!pending)
-            return;
-        if (pending.fighter.startAttack(pending.move, true)) {
-            this.attackStarted(pending.fighter, pending.move);
+    queueMove(fighter, move, frames = 6) {
+        this.moveBuffer.set(fighter, { move, frames });
+    }
+    flushMoveBuffers() {
+        for (const fighter of [this.p1, this.p2]) {
+            const queued = this.moveBuffer.get(fighter);
+            if (!queued)
+                continue;
+            const cancel = fighter.canCancel(queued.move.id);
+            const canTry = cancel || fighter.canAct() || fighter.state === "wakeup";
+            if (canTry && fighter.startAttack(queued.move, cancel)) {
+                this.moveBuffer.delete(fighter);
+                this.attackStarted(fighter, queued.move);
+                continue;
+            }
+            queued.frames -= 1;
+            if (queued.frames <= 0 || fighter.state === "ko" || fighter.state === "finish")
+                this.moveBuffer.delete(fighter);
         }
     }
     armSuperFreeze(f) {
@@ -519,15 +532,19 @@ export class Match {
         const cancel = f.canCancel(move.id);
         const reversal = f.state === "wakeup";
         if (f.startAttack(move, cancel)) {
+            this.moveBuffer.delete(f);
             if (reversal)
                 this.noteEvent("REVERSAL");
             this.attackStarted(f, move);
+        }
+        else if (["attack", "throw", "counter", "dash", "wakeup", "hit"].includes(f.state)) {
+            this.queueMove(f, move, 6);
         }
     }
     spawnProjectile(f, move) {
         const kind = move.projectile ?? "wave";
         const speed = kind === "needle" ? 620 : kind === "veil" ? 300 : kind === "altar" ? 70 : 480;
-        this.projectiles.push({
+        const projectile = {
             x: f.facing > 0 ? f.x + f.w : f.x - 40,
             y: kind === "altar" ? f.y + 92 : f.y + 48,
             vx: f.facing * speed,
@@ -542,10 +559,16 @@ export class Match {
             hitstop: move.hitstop ?? HITSTOP.special,
             move,
             hitsLanded: 0,
-        });
+        };
+        projectile.prevX = projectile.x;
+        projectile.prevY = projectile.y;
+        powerOnProjectileSpawn(this, projectile);
+        this.projectiles.push(projectile);
     }
     updateProjectiles(dt) {
         this.projectiles = this.projectiles.filter((p) => {
+            p.prevX = p.x;
+            p.prevY = p.y;
             p.x += p.vx * dt;
             p.life -= dt;
             if (p.hit || p.life <= 0 || p.x < -80 || p.x > 1400)
@@ -705,7 +728,7 @@ export class Match {
         this.applyHit(att, def, att.attack);
     }
     armorHolds(def, move) {
-        if (move.grab || move.type === "super")
+        if (move.grab || move.type === "super" || move.armorBreak)
             return false;
         const a = def.attack;
         if (!a?.armor)
@@ -717,6 +740,8 @@ export class Match {
     applyHit(att, def, move) {
         if (def.state === "ko" || def.invuln > 0)
             return false;
+        const originalMove = move;
+        move = powerBeforeHit(this, att, def, move);
         if (this.armorHolds(def, move)) {
             const res = def.absorbArmor(move, att.x, att.data.stats.strength);
             const ko = def.health <= 0;
@@ -738,6 +763,7 @@ export class Match {
             att.gainOnHit(move, 1);
             att.cancelReady = true;
             att.hitDone = true;
+            powerAfterHit(this, att, def, originalMove, move, res.dmg);
             this.particles.impact(impactX, impactY, dir, ko ? 1.15 : 0.55, def.data.accent);
             this.particles.bloodBurst(impactX, impactY, dir, ko ? 1.05 : 0.45);
             this.audio.hit(false);
@@ -765,6 +791,7 @@ export class Match {
         const counter = (this.training.forceCounter && this.mode === "training" && !blocked) || (!!inStartup && !blocked);
         const punish = !!inRecovery && !blocked;
         const hitsSoFar = (this.comboOwner === (att === this.p1 ? 1 : 2) ? def.comboHits : 0) + 1;
+        const firstMoveContact = att.hitsLanded === 0;
         const scale = comboScale(hitsSoFar);
         this.lastScale = scale;
         const res = def.takeHit(strike, att.x, scale * att.data.stats.strength, blocked, counter);
@@ -795,6 +822,13 @@ export class Match {
             att.cancelReady = true;
             this.comboOwner = att === this.p1 ? 1 : 2;
             this.noteEvent(punish ? "PUNISH" : counter ? "COUNTER" : ko ? "KO" : "HIT");
+            powerAfterHit(this, att, def, originalMove, move, res.dmg);
+            const completedCombo = firstMoveContact ? att.noteComboMove(originalMove.id) : null;
+            if (completedCombo) {
+                att.meter = Math.min(100, att.meter + 4);
+                this.noteEvent(completedCombo.name.toUpperCase());
+                this.particles.spawn(impactX, impactY - 18, 8, att.data.accent, true);
+            }
             if (move.grab) {
                 att.throwLock = 0.75;
                 def.throwLock = 0.75;
@@ -825,6 +859,7 @@ export class Match {
             }
         }
         else {
+            att.cancelReady = true;
             this.noteEvent("BLOCK");
             this.audio.block();
             this.particles.impact(impactX, impactY, dir, 0.34, "#8ec8ff");
@@ -1045,7 +1080,6 @@ export class Match {
         this.p1.reset(240, 1, true);
         this.p2.reset(960, -1, true);
         this.hitStop.reset();
-        this.pendingCancel = null;
         const last = this.p1.roundWins === this.winsNeeded - 1 && this.p2.roundWins === this.winsNeeded - 1;
         this.message = last ? "FINAL ROUND" : `ROUND ${this.round}`;
     }
@@ -1097,7 +1131,7 @@ export class Match {
             return "";
         return f.data.finishes.map((x) => `${x.name}: ${commandLabel(x.command)}`).join("   ·   ");
     }
-    draw() {
+    draw(renderAlpha = 1) {
         const c = this.ctx;
         c.setTransform(1, 0, 0, 1, 0, 0);
         c.fillStyle = "#050407";
@@ -1107,17 +1141,17 @@ export class Match {
         drawStage(c, this.stage, this.time, this.camera.x, this.gfx.stageFx);
         const preview = this.mode === "training" ? this.training.previewClip : undefined;
         const debug = this.gfx.debugSprites || !!preview;
-        drawFighter(c, this.p1, this.sprites[0], this.gfx.shadows, debug, preview);
-        drawFighter(c, this.p2, this.sprites[1], this.gfx.shadows, this.gfx.debugSprites);
+        drawFighter(c, this.p1, this.sprites[0], this.gfx.shadows, debug, preview, renderAlpha, this.gfx);
+        drawFighter(c, this.p2, this.sprites[1], this.gfx.shadows, this.gfx.debugSprites, undefined, renderAlpha, this.gfx);
         if (this.hitStop.frozen && this.hitStop.fx && this.hitStop.victim) {
             c.save();
             c.globalAlpha = 0.22 * this.hitStop.t;
             c.translate(-this.hitStop.dir * 12, 0);
-            drawFighter(c, this.hitStop.victim, this.hitStop.victim === this.p1 ? this.sprites[0] : this.sprites[1], false);
+            drawFighter(c, this.hitStop.victim, this.hitStop.victim === this.p1 ? this.sprites[0] : this.sprites[1], false, false, undefined, renderAlpha, this.gfx);
             c.restore();
         }
         for (const p of this.projectiles)
-            drawProjectile(c, p);
+            drawProjectile(c, p, renderAlpha);
         drawStageForeground(c, this.stage, this.time, this.camera.x, this.gfx.stageFx);
         this.hitStop.drawWorld(c);
         this.particles.draw(c);
@@ -1149,14 +1183,16 @@ export class Match {
             this.hitStop.drawScreen(c);
     }
 }
-function drawProjectile(c, p) {
+function drawProjectile(c, p, alpha = 1) {
     const color = p.kind === "needle" ? "#e6d4ff"
         : p.kind === "veil" ? "#d46bff"
-            : p.kind === "altar" ? "#ff3358"
+            : p.kind === "altar" || p.kind === "altarBurst" ? "#ff3358"
                 : p.kind === "scythe-wave" ? "#ff4d3a"
                     : "#ff6a3c";
     c.save();
-    c.translate(p.x + p.w / 2, p.y + p.h / 2);
+    const px = (p.prevX ?? p.x) + (p.x - (p.prevX ?? p.x)) * alpha;
+    const py = (p.prevY ?? p.y) + (p.y - (p.prevY ?? p.y)) * alpha;
+    c.translate(px + p.w / 2, py + p.h / 2);
     c.fillStyle = color;
     c.strokeStyle = color;
     c.shadowColor = color;
@@ -1180,8 +1216,15 @@ function drawProjectile(c, p) {
         c.arc(0, 0, Math.max(10, p.h * 0.85), a0, a1);
         c.stroke();
     }
-    else if (p.kind === "altar") {
-        c.lineWidth = 3;
+    else if (p.kind === "altar" || p.kind === "altarBurst") {
+        c.lineWidth = p.kind === "altarBurst" ? 6 : 3;
+        if (p.kind === "altarBurst") {
+            c.globalAlpha = 0.32;
+            c.beginPath();
+            c.ellipse(0, 0, p.w / 2, p.h / 2, 0, 0, Math.PI * 2);
+            c.fill();
+            c.globalAlpha = 1;
+        }
         c.strokeRect(-p.w / 2, -p.h / 2, p.w, p.h);
         c.beginPath();
         c.moveTo(-10, 0);
@@ -1215,6 +1258,7 @@ function snap(f) {
         meter: f.meter,
         superMeter: f.superMeter,
         roundWins: f.roundWins,
+        statuses: f.statusLabels(),
     };
 }
 function resolvePalette(list, pick, fallbackIndex) {

@@ -4,6 +4,8 @@ export class Fighter {
     name;
     x;
     y;
+    prevX;
+    prevY;
     vx = 0;
     vy = 0;
     w = 76;
@@ -44,6 +46,9 @@ export class Fighter {
     airHits = 0;
     wakeupKind = "normal";
     juggleGravity = 1;
+    statuses = new Map();
+    comboRoute = [];
+    comboRouteTimer = 0;
     /** Visual only. Never changes hitboxes or frame data. */
     paletteId = "default";
     skin = "default";
@@ -52,6 +57,8 @@ export class Fighter {
         this.name = data.name;
         this.x = x;
         this.y = y;
+        this.prevX = x;
+        this.prevY = y;
         this.facing = facing;
         this.isAI = isAI;
         this.maxHealth = data.stats.maxHealth;
@@ -60,6 +67,8 @@ export class Fighter {
     reset(x, facing, keepMeter = false) {
         this.x = x;
         this.y = GAME.FLOOR - this.h;
+        this.prevX = this.x;
+        this.prevY = this.y;
         this.vx = 0;
         this.vy = 0;
         this.facing = facing;
@@ -93,6 +102,44 @@ export class Fighter {
         this.airHits = 0;
         this.wakeupKind = "normal";
         this.juggleGravity = 1;
+        this.statuses.clear();
+        this.comboRoute = [];
+        this.comboRouteTimer = 0;
+    }
+    setStatus(id, duration, data = {}) {
+        this.statuses.set(id, { id, remaining: duration, ...data });
+    }
+    hasStatus(id) {
+        return (this.statuses.get(id)?.remaining ?? 0) > 0;
+    }
+    getStatus(id) {
+        return this.hasStatus(id) ? this.statuses.get(id) : undefined;
+    }
+    consumeStatus(id) {
+        if (!this.hasStatus(id))
+            return false;
+        this.statuses.delete(id);
+        return true;
+    }
+    statusLabels() {
+        return [...this.statuses.values()].filter((s) => s.remaining > 0).map((s) => s.label ?? s.id);
+    }
+    noteComboMove(moveId) {
+        if (this.comboRouteTimer <= 0)
+            this.comboRoute = [];
+        if (this.comboRoute.at(-1) !== moveId || this.hitsLanded === 0)
+            this.comboRoute.push(moveId);
+        if (this.comboRoute.length > 10)
+            this.comboRoute.shift();
+        this.comboRouteTimer = GAME.COMBO_DROP + 0.7;
+        for (const combo of this.data.combos ?? []) {
+            if (combo.sequence.length > this.comboRoute.length)
+                continue;
+            const tail = this.comboRoute.slice(-combo.sequence.length);
+            if (tail.every((id, i) => id === combo.sequence[i]))
+                return combo;
+        }
+        return null;
     }
     canAct() {
         return this.stun <= 0 && !["attack", "hit", "ko", "knockdown", "wakeup", "throw", "thrown", "finish", "victory", "counter"].includes(this.state);
@@ -296,6 +343,8 @@ export class Fighter {
         this.superMeter = Math.min(100, this.superMeter + (move.superGain || 8) + hits * 2);
     }
     update(dt, frozen = false) {
+        this.prevX = this.x;
+        this.prevY = this.y;
         if (frozen && this.state !== "attack") {
             this.hitFlash = Math.max(0, this.hitFlash - dt);
             this.impactSquash *= Math.exp(-10 * dt);
@@ -308,6 +357,12 @@ export class Fighter {
         this.invuln = Math.max(0, this.invuln - dt);
         this.throwLock = Math.max(0, this.throwLock - dt);
         this.comboTimer = Math.max(0, this.comboTimer - dt);
+        this.comboRouteTimer = Math.max(0, this.comboRouteTimer - dt);
+        for (const [id, status] of this.statuses) {
+            status.remaining -= dt;
+            if (status.remaining <= 0)
+                this.statuses.delete(id);
+        }
         this.impactSquash *= Math.exp(-14 * dt);
         if (this.impactSquash < 0.02)
             this.impactSquash = 0;

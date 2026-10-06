@@ -1,10 +1,12 @@
 import { assetUrl } from "../assets/url.js";
-const gatling = ["medium", "heavy", "kickLight", "kickHeavy", "special1", "special2", "special3", "super"];
+const gatling = ["light", "medium", "heavy", "kickLight", "kickHeavy", "special1", "special2", "special3", "super"];
 export const draven = {
     id: "draven",
     name: "DRAVEN",
     title: "Punhos de Ferro",
     style: "Boxe sujo — rushdown curto, armadura e command grab",
+    trait: { name: "Fúria de Sangue", description: "Quebra-Costela ativa uma janela de pressão: golpes ganham dano e stun, e Passo de Ferro recebe invulnerabilidade extra." },
+    presentation: { anticipation: 1.12, snap: 1.34, trail: 0.22, idleBob: 0.7 },
     color: "#8a7a6a",
     accent: "#d9c4a8",
     portrait: assetUrl("/fighters/draven.webp"),
@@ -67,7 +69,7 @@ export const draven = {
         heavy: {
             id: "heavy", name: "Haymaker", type: "normal", button: "heavy",
             damage: 128, range: 74, startup: 13, active: 4, recovery: 20, hitStun: 19, blockStun: 11,
-            knockback: 260, priority: 4, meterGain: 13, superGain: 7, cancelInto: ["special1", "special3", "super"], height: "mid",
+            knockback: 260, priority: 4, meterGain: 13, superGain: 7, cancelInto: ["special1", "special2", "special3", "super"], height: "mid",
             hitstop: 9,
         },
         kickLight: {
@@ -115,13 +117,13 @@ export const draven = {
         throw: {
             id: "throw", name: "Clinch", type: "throw", button: "throw",
             damage: 165, range: 48, startup: 4, active: 3, recovery: 20, hitStun: 0, blockStun: 0,
-            knockback: 340, priority: 9, meterGain: 10, superGain: 8, grab: true, knockdown: true, height: "mid",
+            knockback: 340, priority: 9, meterGain: 10, superGain: 8, grab: true, knockdown: true, cancelInto: ["special1"], height: "mid",
             hitstop: 7,
         },
         counter: {
             id: "counter", name: "Parry de Ombro", type: "counter", command: "22L",
             damage: 90, range: 64, startup: 3, active: 9, recovery: 18, hitStun: 16, blockStun: 0,
-            knockback: 170, priority: 7, meterGain: 12, superGain: 8, invuln: 11, height: "mid",
+            knockback: 170, priority: 7, meterGain: 12, superGain: 8, invuln: 11, cancelInto: ["heavy"], height: "mid",
             hitstop: 6,
         },
         taunt: {

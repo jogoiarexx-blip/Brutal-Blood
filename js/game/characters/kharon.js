@@ -1,10 +1,12 @@
 import { assetUrl } from "../assets/url.js";
-const gatling = ["medium", "heavy", "kickLight", "kickHeavy", "special1", "special2", "special3", "super"];
+const gatling = ["light", "medium", "heavy", "kickLight", "kickHeavy", "special1", "special2", "special3", "super"];
 export const kharon = {
     id: "kharon",
     name: "KHARON",
     title: "O Carrasco",
     style: "Execução brutal — pressão curta, antiaéreo e confirms pesados",
+    trait: { name: "Marca do Carrasco", description: "Ceifar Almas marca o rival; Pesado, Investida Carmesim ou Super consomem a marca para quebrar armadura e ampliar o impacto." },
+    presentation: { anticipation: 1.08, snap: 1.12, trail: 0.18, idleBob: 0.55 },
     color: "#c92b35",
     accent: "#ff8a61",
     portrait: assetUrl("/fighters/kharon.webp"),
@@ -121,7 +123,7 @@ export const kharon = {
         counter: {
             id: "counter", name: "Parry do Carrasco", type: "counter", command: "22L",
             damage: 96, range: 80, startup: 3, active: 10, recovery: 20, hitStun: 18, blockStun: 0,
-            knockback: 200, priority: 7, meterGain: 12, superGain: 8, invuln: 12, height: "mid",
+            knockback: 200, priority: 7, meterGain: 12, superGain: 8, invuln: 12, cancelInto: ["heavy", "special2"], height: "mid",
             hitstop: 6,
         },
         taunt: {

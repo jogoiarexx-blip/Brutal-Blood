@@ -5,6 +5,8 @@ export const shai = {
     name: "SHAI",
     title: "Olho Carmesim",
     style: "Zoner móvel — lâminas, projéteis e reposicionamento",
+    trait: { name: "Visão Aberta", description: "Olho Antecipado concede Foco; a próxima Agulha Carmesim vira um disparo acelerado de dois impactos." },
+    presentation: { anticipation: 0.68, snap: 1.38, trail: 0.62, idleBob: 0.9 },
     color: "#6b1820",
     accent: "#ff4e59",
     portrait: assetUrl("/fighters/shai.webp"),

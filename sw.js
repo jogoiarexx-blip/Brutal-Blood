@@ -1,4 +1,4 @@
-const VERSION = '0.24.0';
+const VERSION = '0.26.0';
 const CACHE = `brutal-blood-${VERSION}`;
 const CORE = [
   './', './index.html', './css/style.css', './js/app.js',

@@ -173,6 +173,11 @@ function selectView() {
 
   const side = h('aside', { class: 'panel select-side' });
   side.append(selectionSummary());
+  if (state.p1?.trait) side.append(h('div', { class: 'story-mini trait-mini' }, [
+    h('strong', { text: state.p1.trait.name }),
+    h('p', { text: state.p1.trait.description })
+  ]));
+  if (state.p1) side.append(combatGuide(state.p1, true));
   if (state.mode === 'arcade') side.append(selectControl('Dificuldade', Object.entries(DIFFICULTY_LABELS), state.difficulty, v => {
     state.difficulty = v; state.run.campaignDifficulty = v; patchSave({ difficulty: v }); selectView();
   }));
@@ -214,6 +219,35 @@ function pickFighter(f) {
     }
   }
   selectView();
+}
+
+function moveName(fighter, moveId) {
+  return fighter?.moves?.[moveId]?.name || moveId;
+}
+function combatGuide(fighter, compact = false) {
+  if (!fighter) return null;
+  const box = h('div', { class: `combat-guide ${compact ? 'compact' : ''}` });
+  const specials = Object.values(fighter.moves || {}).filter(m => m.type === 'special' || m.type === 'counter' || m.type === 'super');
+  box.append(h('div', { class:'combat-guide-title', text:'PODERES & COMANDOS' }));
+  const moveList = h('div', { class:'move-guide-list' });
+  for (const move of specials.slice(0, compact ? 4 : 6)) {
+    moveList.append(h('div', { class:'move-guide-row' }, [
+      h('span', { text: move.name }),
+      h('kbd', { text: move.command || move.button || '—' })
+    ]));
+  }
+  box.append(moveList);
+  const combos = (fighter.combos || []).filter(c => ['basic','intermediate','advanced','meter','counter','punish'].includes(c.level)).slice(0, compact ? 3 : 5);
+  if (combos.length) {
+    box.append(h('div', { class:'combat-guide-title combos-title', text:'COMBOS ASSINATURA' }));
+    for (const combo of combos) {
+      box.append(h('div', { class:'combo-guide-row' }, [
+        h('strong', { text: combo.name }),
+        h('small', { text: combo.sequence.map(id => moveName(fighter, id)).join('  ›  ') })
+      ]));
+    }
+  }
+  return box;
 }
 
 function selectionSummary() {
@@ -327,9 +361,9 @@ function launchFight({ foe, diff, stage, label, winsNeeded, carry, pack, runtime
 function buildHud() {
   const wrap=h('div',{class:'hud',id:'hud'});
   wrap.innerHTML=`
-    <div class="hud-side left"><div class="hud-name" id="p1name">P1</div><div class="health"><i id="p1hp"></i></div><div class="meter"><i id="p1meter"></i></div><div class="super"><i id="p1super"></i></div></div>
+    <div class="hud-side left"><div class="hud-name" id="p1name">P1</div><div class="hud-status" id="p1status"></div><div class="health"><i id="p1hp"></i></div><div class="meter"><i id="p1meter"></i></div><div class="super"><i id="p1super"></i></div></div>
     <div class="hud-center"><div id="runlabel" class="runlabel"></div><div id="timer" class="timer">99</div><div id="roundlabel" class="roundlabel"></div></div>
-    <div class="hud-side right"><div class="hud-name" id="p2name">P2</div><div class="health"><i id="p2hp"></i></div><div class="meter"><i id="p2meter"></i></div><div class="super"><i id="p2super"></i></div></div>
+    <div class="hud-side right"><div class="hud-name" id="p2name">P2</div><div class="hud-status" id="p2status"></div><div class="health"><i id="p2hp"></i></div><div class="meter"><i id="p2meter"></i></div><div class="super"><i id="p2super"></i></div></div>
     <div id="fightmsg" class="fight-msg"></div><div id="combo" class="combo"></div>`;
   return wrap;
 }
@@ -337,6 +371,7 @@ function updateHud(hud) {
   state.hud=hud;
   const $=id=>document.getElementById(id); if (!$('p1hp')) return;
   $('p1name').textContent=hud.p1.name; $('p2name').textContent=hud.p2.name;
+  $('p1status').textContent=(hud.p1.statuses||[]).join(' · '); $('p2status').textContent=(hud.p2.statuses||[]).join(' · ');
   $('p1hp').style.width=`${Math.max(0,hud.p1.health/hud.p1.maxHealth*100)}%`; $('p2hp').style.width=`${Math.max(0,hud.p2.health/hud.p2.maxHealth*100)}%`;
   $('p1meter').style.width=`${hud.p1.meter}%`; $('p2meter').style.width=`${hud.p2.meter}%`;
   $('p1super').style.width=`${hud.p1.superMeter}%`; $('p2super').style.width=`${hud.p2.superMeter}%`;
@@ -430,7 +465,7 @@ function charactersView(){
   for(const slot of visibleSlots(save)){
     const live=playable.find(f=>f.id===slot.id); const selectable=canSelect(slot.id,save); const card=h('article',{class:`panel char-detail ${selectable?'':'locked'}`},[
       live?h('img',{src:live.portrait,alt:slot.name}):h('div',{class:'unknown-portrait',text:'?'}),
-      h('div',{},[h('div',{class:'eyebrow',text:`SLOT ${String(slot.slot).padStart(2,'0')}`}),h('h3',{text:slot.name}),h('strong',{text:slot.title}),h('p',{text:live?.lore||hintFor(slot.id,save)||'Em desenvolvimento.'}),h('small',{text:selectable?'JOGÁVEL':hintFor(slot.id,save)})])
+      h('div',{},[h('div',{class:'eyebrow',text:`SLOT ${String(slot.slot).padStart(2,'0')}`}),h('h3',{text:slot.name}),h('strong',{text:slot.title}),h('p',{text:live?.lore||hintFor(slot.id,save)||'Em desenvolvimento.'}),live?.trait?h('p',{class:'char-trait',text:`${live.trait.name} — ${live.trait.description}`}):null,selectable&&live?combatGuide(live,true):null,h('small',{text:selectable?'JOGÁVEL':hintFor(slot.id,save)})])
     ]); grid.append(card);
   }
   main.append(grid,backButton(menu));root.append(main);
@@ -450,7 +485,7 @@ function settingsView(){
   for(const [key,label] of [['master','Volume geral'],['music','Música'],['sfx','Efeitos']]){
     const row=h('label',{class:'range-field'},[h('span',{text:label})]);const input=h('input',{type:'range',min:0,max:1,step:0.05,value:save.audio[key],oninput:e=>{const a={...getSave().audio,[key]:Number(e.target.value)};patchSave({audio:a});state.audio.apply(a);}});row.append(input);panel.append(row);
   }
-  for(const [key,label] of [['particles','Partículas'],['screenShake','Screen shake'],['hitstop','Hitstop'],['bloom','Bloom'],['stageFx','Efeitos do cenário']]) panel.append(toggle(label,save.graphics[key],v=>{patchSave({graphics:{...getSave().graphics,[key]:v}});settingsView();}));
+  for(const [key,label] of [['particles','Partículas'],['screenShake','Screen shake'],['hitstop','Hitstop'],['bloom','Bloom'],['stageFx','Efeitos do cenário'],['motionSmoothing','Movimento suave'],['frameBlend','Transição entre quadros'],['motionTrails','Rastros de movimento']]) panel.append(toggle(label,save.graphics[key],v=>{patchSave({graphics:{...getSave().graphics,[key]:v}});settingsView();}));
   panel.append(toggle('Vibração',save.rumble,v=>{patchSave({rumble:v});state.input.rumble=v;settingsView();}));
   main.append(panel,backButton(menu));root.append(main);
 }

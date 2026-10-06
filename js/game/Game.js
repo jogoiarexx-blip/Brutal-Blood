@@ -64,7 +64,8 @@ export class Game {
             const maxFps = getSave().graphics.maxFps;
             const minDraw = 1000 / maxFps;
             if (now - this.lastDraw >= minDraw - 0.5) {
-                this.match.draw();
+                const renderAlpha = Math.max(0, Math.min(1, this.acc / GAME.FRAME));
+                this.match.draw(renderAlpha);
                 this.lastDraw = now;
             }
             this.raf = requestAnimationFrame(loop);

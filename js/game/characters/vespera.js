@@ -5,6 +5,8 @@ export const vespera = {
     name: "VESPERA",
     title: "A Viúva Carmesim",
     style: "Zoning — véus, altares e controle de espaço",
+    trait: { name: "Altar Rubro", description: "Altar de Sangue permanece no chão como armadilha; Rosa Negra detona o altar ativo e transforma controle de espaço em explosão." },
+    presentation: { anticipation: 0.9, snap: 0.92, trail: 0.46, idleBob: 1.0 },
     color: "#7a1230",
     accent: "#e35a7a",
     portrait: assetUrl("/fighters/vespera.webp"),
@@ -102,7 +104,7 @@ export const vespera = {
         special3: {
             id: "special3", name: "Rosa Negra", type: "special", command: "214K",
             damage: 132, range: 160, startup: 12, active: 8, recovery: 22, hitStun: 18, blockStun: 9,
-            knockback: 220, priority: 5, meterGain: 5, superGain: 10, cost: 32, cancelInto: ["super"],
+            knockback: 220, priority: 5, meterGain: 5, superGain: 10, cost: 32, cancelInto: ["special1", "super"],
             height: "mid", advance: -80, hitstop: 6,
         },
         super: {
@@ -120,7 +122,7 @@ export const vespera = {
         counter: {
             id: "counter", name: "Espelho de Sangue", type: "counter", command: "4M",
             damage: 88, range: 86, startup: 3, active: 10, recovery: 18, hitStun: 16, blockStun: 0,
-            knockback: 190, priority: 7, meterGain: 12, superGain: 8, invuln: 11, height: "mid",
+            knockback: 190, priority: 7, meterGain: 12, superGain: 8, invuln: 11, cancelInto: ["special1"], height: "mid",
             hitstop: 6,
         },
         taunt: {

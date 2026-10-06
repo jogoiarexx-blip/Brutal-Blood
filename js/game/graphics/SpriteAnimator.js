@@ -124,7 +124,8 @@ export class SpriteAnimator {
         // Timing belongs to the move that was requested. Pixels may come from a borrowed sheet.
         const driver = this.clip(anim) ?? resolved.clip;
         const n = resolved.frames;
-        const i = pickFrame(driver, n, localTime, driver.fps || resolved.fps, opts);
+        const sample = pickFrameSample(driver, n, localTime, driver.fps || resolved.fps, opts);
+        const i = sample.frame;
         this.lastAnim = anim;
         this.lastFrame = i;
         this.lastSrc = resolved.src;
@@ -140,10 +141,6 @@ export class SpriteAnimator {
             return false;
         const frameW = iw / cols;
         const frameH = ih / rows;
-        const col = i % cols;
-        const row = Math.min(rows - 1, driver.row ?? resolved.clip.row ?? Math.floor(i / cols));
-        const sx = col * frameW;
-        const sy = row * frameH;
         const visScale = (driver.scale ?? resolved.clip.scale ?? 1) * (h / frameH);
         const squash = opts.squash ?? 0;
         const sxScale = visScale * (1 + squash * 0.16);
@@ -159,7 +156,13 @@ export class SpriteAnimator {
             // Full-image palette fallback when no maskSrc is loaded.
             ctx.filter = paletteFilter(this.palette);
         }
-        ctx.drawImage(pixels, sx, sy, frameW, frameH, -px * sxScale, -py * syScale, frameW * sxScale, frameH * syScale);
+        const baseAlpha = ctx.globalAlpha;
+        const blend = opts.frameBlend ? Math.min(0.38, sample.blend * 0.38) : 0;
+        drawCell(ctx, pixels, i, cols, rows, frameW, frameH, px, py, sxScale, syScale, baseAlpha * (1 - blend), driver.row ?? resolved.clip.row);
+        if (blend > 0.01 && sample.next !== i) {
+            drawCell(ctx, pixels, sample.next, cols, rows, frameW, frameH, px, py, sxScale, syScale, baseAlpha * blend, driver.row ?? resolved.clip.row);
+        }
+        ctx.globalAlpha = baseAlpha;
         ctx.filter = "none";
         ctx.restore();
         return true;
@@ -234,22 +237,28 @@ function tintWithMask(skin, src, maskSrc, pal, img, mask) {
     tintCache.set(key, out);
     return out;
 }
-function pickFrame(clip, n, time, fps, opts) {
+function pickFrameSample(clip, n, time, fps, opts) {
     const atk = opts.attack;
     if (atk && opts.attackFrame != null && isAttackClip(clip.name)) {
         if (clip.frameMap && clip.frameMap.length) {
             const total = Math.max(1, atk.startup + atk.active + atk.recovery);
-            const idx = Math.min(clip.frameMap.length - 1, Math.floor((opts.attackFrame / total) * clip.frameMap.length));
-            return ((clip.frameMap[idx] % n) + n) % n;
+            const raw = Math.min(clip.frameMap.length - 1, Math.floor((opts.attackFrame / total) * clip.frameMap.length));
+            const frame = ((clip.frameMap[raw] % n) + n) % n;
+            return { frame, next: frame, blend: 0 };
         }
-        return attackMappedFrame(n, opts.attackFrame, atk.startup, atk.active, atk.recovery);
+        return attackMappedSample(n, opts.attackFrame, atk.startup, atk.active, atk.recovery);
     }
-    let i = clip.loop
-        ? Math.floor(time * fps) % n
-        : Math.min(n - 1, Math.floor(time * fps));
-    if (clip.reverseFrames)
-        i = n - 1 - i;
-    return i;
+    if (n <= 1)
+        return { frame: 0, next: 0, blend: 0 };
+    const pos = Math.max(0, time * fps);
+    let base = clip.loop ? Math.floor(pos) % n : Math.min(n - 1, Math.floor(pos));
+    let next = clip.loop ? (base + 1) % n : Math.min(n - 1, base + 1);
+    let blend = clip.loop || base < n - 1 ? pos - Math.floor(pos) : 0;
+    if (clip.reverseFrames) {
+        base = n - 1 - base;
+        next = n - 1 - next;
+    }
+    return { frame: base, next, blend };
 }
 function isAttackClip(name) {
     return [
@@ -257,22 +266,48 @@ function isAttackClip(name) {
         "special1", "special2", "special3", "super", "finish1", "finish2", "counter",
     ].includes(name);
 }
-function attackMappedFrame(n, attackFrame, startup, active, recovery) {
-    const total = Math.max(1, startup + active + recovery);
-    const f = Math.max(0, Math.min(total, attackFrame));
-    const startN = Math.max(1, Math.round(n * 0.3));
-    const activeN = Math.max(1, Math.round(n * 0.4));
-    const recN = Math.max(1, n - startN - activeN);
-    if (f < startup) {
-        const t = startup <= 1 ? 0 : f / (startup - 1);
-        return Math.min(startN - 1, Math.floor(t * startN));
+function attackMappedSample(n, attackFrame, startup, active, recovery) {
+    if (n <= 1)
+        return { frame: 0, next: 0, blend: 0 };
+    const counts = allocateAttackFrames(n);
+    const f = Math.max(0, attackFrame);
+    if (f < startup)
+        return phaseSample(0, counts.startup, startup <= 1 ? 1 : f / Math.max(1, startup - 1));
+    if (f < startup + active)
+        return phaseSample(counts.startup, counts.active, active <= 1 ? 1 : (f - startup) / Math.max(1, active - 1));
+    return phaseSample(counts.startup + counts.active, counts.recovery, recovery <= 1 ? 1 : (f - startup - active) / Math.max(1, recovery));
+}
+function allocateAttackFrames(n) {
+    // Keep every segment inside the real sheet even on tiny 2–3 frame clips.
+    if (n === 2)
+        return { startup: 1, active: 1, recovery: 0 };
+    const startup = Math.max(1, Math.round(n * 0.30));
+    const active = Math.max(1, Math.round(n * 0.40));
+    const used = Math.min(n, startup + active);
+    return { startup: Math.min(startup, n), active: Math.min(active, Math.max(0, n - Math.min(startup, n))), recovery: Math.max(0, n - used) };
+}
+function phaseSample(start, count, t) {
+    if (count <= 0) {
+        const frame = Math.max(0, start - 1);
+        return { frame, next: frame, blend: 0 };
     }
-    if (f < startup + active) {
-        const t = active <= 1 ? 1 : (f - startup) / Math.max(1, active - 1);
-        return Math.min(startN + activeN - 1, startN + Math.floor(t * activeN));
-    }
-    const t = recovery <= 1 ? 1 : (f - startup - active) / Math.max(1, recovery);
-    return Math.min(n - 1, startN + activeN + Math.floor(t * recN));
+    if (count === 1)
+        return { frame: start, next: start, blend: 0 };
+    const x = Math.max(0, Math.min(1, t));
+    const pos = x * (count - 1);
+    const offset = Math.floor(pos);
+    const frame = start + offset;
+    return { frame, next: start + Math.min(count - 1, offset + 1), blend: pos - offset };
+}
+function drawCell(ctx, pixels, frame, cols, rows, frameW, frameH, px, py, sxScale, syScale, alpha, fixedRow) {
+    const safe = Math.max(0, Math.min(cols * rows - 1, frame));
+    const col = safe % cols;
+    const row = Math.min(rows - 1, fixedRow ?? Math.floor(safe / cols));
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(
+        pixels, col * frameW, row * frameH, frameW, frameH,
+        -px * sxScale, -py * syScale, frameW * sxScale, frameH * syScale,
+    );
 }
 function imageWidth(img) {
     if (typeof HTMLImageElement !== "undefined" && img instanceof HTMLImageElement)

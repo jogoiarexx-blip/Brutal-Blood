@@ -1,10 +1,12 @@
 import { assetUrl } from "../assets/url.js";
-const gatling = ["medium", "heavy", "kickLight", "kickHeavy", "special1", "special2", "special3", "super"];
+const gatling = ["light", "medium", "heavy", "kickLight", "kickHeavy", "special1", "special2", "special3", "super"];
 export const nyx = {
     id: "nyx",
     name: "NYX",
     title: "A Lâmina do Vazio",
     style: "Assassina móvel — mixups, dash e punições longas",
+    trait: { name: "Passo Sombrio", description: "Agulha Sombria marca o rival; Passo do Eclipse consome a marca e reaparece nas costas do alvo com breve invulnerabilidade." },
+    presentation: { anticipation: 0.72, snap: 1.48, trail: 0.72, idleBob: 1.05 },
     color: "#6a4cc4",
     accent: "#d697ff",
     portrait: assetUrl("/fighters/nyx.webp"),
@@ -120,7 +122,7 @@ export const nyx = {
         counter: {
             id: "counter", name: "Desvio Lunar", type: "counter", command: "4M",
             damage: 80, range: 90, startup: 2, active: 12, recovery: 16, hitStun: 16, blockStun: 0,
-            knockback: 180, priority: 7, meterGain: 12, superGain: 8, invuln: 12, height: "mid",
+            knockback: 180, priority: 7, meterGain: 12, superGain: 8, invuln: 12, cancelInto: ["medium", "special1"], height: "mid",
             hitstop: 5,
         },
         taunt: {
