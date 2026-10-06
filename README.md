@@ -1,16 +1,27 @@
-# BRUTAL BLOOD v0.22.0 — Static GitHub Edition
+# BRUTAL BLOOD v0.24.0 — Static GitHub Edition
 
-Distribuição limpa para GitHub Pages.
+Jogo de luta 2D em HTML, CSS e JavaScript estáticos para GitHub Pages. Não precisa de backend, Node, Vite ou servidor da aplicação.
 
 ## Estrutura
 - `index.html` — entrada do jogo
-- `css/style.css` — toda a interface
-- `js/app.js` — interface e fluxo dos modos
-- `js/game/` — motor de luta compilado para ES Modules
-- `assets/` — sprites e imagens usados em runtime
+- `css/style.css` — interface
+- `js/app.js` — menus e fluxo dos modos
+- `js/game/` — motor de luta em ES Modules
+- `assets/` — sprites e imagens de runtime
 - `sw.js` + `manifest.webmanifest` — PWA/offline no GitHub Pages
 
-## Publicação
-Envie o conteúdo desta pasta para a raiz do repositório e ative **Settings → Pages → Deploy from a branch** apontando para a raiz (`/`). Não há backend, Node, Vite, banco ou servidor da aplicação.
+## v0.23.0 — carregamento de luta
+- sprites carregados com concorrência limitada a 4 workers;
+- cache, progresso, fallbacks e cancelamento preservados;
+- falha crítica libera referências antes de abortar a luta.
 
-Observação: por usar ES Modules, teste a versão publicada no GitHub Pages. Abrir `index.html` diretamente com `file://` pode ser bloqueado por políticas do navegador.
+## v0.24.0 — boot e atualização
+- motor de combate carregado sob demanda, fora do grafo inicial do menu;
+- pre-warm em idle após entrar no menu para esconder o custo da primeira luta;
+- Service Worker usa network-first para HTML/JS/CSS e stale-while-revalidate para assets;
+- uma nova versão publicada no GitHub Pages substitui o cache antigo automaticamente.
+
+## Publicação
+O conteúdo desta pasta pode ficar diretamente na raiz do repositório com **GitHub Pages → Deploy from a branch → main / root**.
+
+Por usar ES Modules, a versão oficial deve ser executada pelo GitHub Pages. Abrir `index.html` via `file://` pode ser bloqueado pelas políticas do navegador.

@@ -3,8 +3,6 @@ import { getSave, patchSave, bumpStat, recordMaxCombo } from './game/core/save.j
 import { playable } from './game/characters/roster.js';
 import { Input } from './game/input/Input.js';
 import { AudioManager } from './game/audio/AudioManager.js';
-import { Game } from './game/Game.js';
-import { loadFightAssets, collectFightJobs, releaseFightAssets } from './game/assets/index.js';
 import { STAGES } from './game/graphics/stages.js';
 import {
   ARCADE_CONTINUES, ARCADE_LADDER, arcadeOpponent, buildBracket, healCarry,
@@ -17,6 +15,39 @@ import {
 } from './game/progression/index.js';
 
 const root = document.querySelector('#app');
+
+// The combat engine is the heaviest part of the module graph. Keep the menu,
+// settings and character browser responsive by loading it only when the player
+// is heading into a fight. The promise is shared so menu pre-warming and a
+// direct START click never trigger duplicate module downloads.
+let fightRuntime = null;
+let fightRuntimePromise = null;
+function getFightRuntime() {
+  if (fightRuntime) return Promise.resolve(fightRuntime);
+  if (!fightRuntimePromise) {
+    fightRuntimePromise = Promise.all([
+      import('./game/Game.js'),
+      import('./game/assets/index.js'),
+    ]).then(([game, assets]) => {
+      fightRuntime = {
+        Game: game.Game,
+        loadFightAssets: assets.loadFightAssets,
+        collectFightJobs: assets.collectFightJobs,
+        releaseFightAssets: assets.releaseFightAssets,
+      };
+      return fightRuntime;
+    }).catch(err => {
+      fightRuntimePromise = null;
+      throw err;
+    });
+  }
+  return fightRuntimePromise;
+}
+function warmFightRuntime() {
+  const warm = () => { getFightRuntime().catch(() => {}); };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(warm, { timeout: 1400 });
+  else setTimeout(warm, 350);
+}
 const state = {
   screen: 'boot', mode: 'arcade', p1: null, p2: null, pickSlot: 1,
   difficulty: getSave().difficulty, stageId: getSave().lastStage,
@@ -106,6 +137,7 @@ function menu() {
   for (const [label, fn] of items) grid.append(menuButton(label, fn));
   main.append(hero, grid, h('footer', { class: 'footer-note', text: 'Teclado, gamepad e controles touch suportados.' }));
   root.append(main);
+  warmFightRuntime();
 }
 
 function menuButton(label, fn) {
@@ -238,18 +270,21 @@ async function startFight(options = {}) {
   patchSave({ difficulty: diff, lastStage: stage });
   state.audio?.stopMusic();
   cleanupFight(false);
-  const jobs = collectFightJobs({ p1: state.p1.id, p2: foe.id, stage });
-  showLoading(0, jobs.length || 1, 'Preparando a arena…');
   const ac = new AbortController(); state.loadingAbort = ac;
+  showLoading(0, 1, 'Inicializando motor de combate…');
   try {
-    const pack = await loadFightAssets({ p1: state.p1.id, p2: foe.id, stage }, {
+    const runtime = await getFightRuntime();
+    if (ac.signal.aborted) return;
+    const jobs = runtime.collectFightJobs({ p1: state.p1.id, p2: foe.id, stage });
+    showLoading(0, jobs.length || 1, 'Preparando a arena…');
+    const pack = await runtime.loadFightAssets({ p1: state.p1.id, p2: foe.id, stage }, {
       signal: ac.signal,
       audioContext: state.audio?.context() ?? null,
       onProgress: p => showLoading(p.loaded, p.total, p.current || 'Carregando…', p.failed?.length || 0),
     });
-    if (ac.signal.aborted) { releaseFightAssets(pack); return; }
+    if (ac.signal.aborted) { runtime.releaseFightAssets(pack); return; }
     state.pack = pack;
-    launchFight({ foe, diff, stage, label, winsNeeded, carry: options.carry, pack });
+    launchFight({ foe, diff, stage, label, winsNeeded, carry: options.carry, pack, runtime });
   } catch (err) {
     if (ac.signal.aborted) return;
     showLoadingError(err instanceof Error ? err.message : 'Falha ao carregar a luta.');
@@ -271,7 +306,7 @@ function showLoadingError(message) {
   ])])); root.append(main);
 }
 
-function launchFight({ foe, diff, stage, label, winsNeeded, carry, pack }) {
+function launchFight({ foe, diff, stage, label, winsNeeded, carry, pack, runtime }) {
   state.screen = 'fight'; clearRoot();
   const arena = h('main', { class:'fight-screen' });
   const canvas = h('canvas', { width:1280, height:720, class:'game-canvas' });
@@ -280,7 +315,7 @@ function launchFight({ foe, diff, stage, label, winsNeeded, carry, pack }) {
   arena.append(canvas, hud, overlays);
   root.append(arena);
   createTouchControls(arena);
-  const game = new Game({
+  const game = new runtime.Game({
     canvas, p1:state.p1, p2:foe, mode:state.mode, difficulty:diff, stageId:stage,
     input:state.input, audio:state.audio, winsNeeded, runLabel:label, carry, assets:pack,
     onHUD:updateHud, onMatchEnd:finishMatch, onPause:v=>{ state.paused=v; renderPause(); }
@@ -385,7 +420,7 @@ function advanceRun(){
 function cleanupFight(startMusic=true){
   state.loadingAbort?.abort(); state.loadingAbort=null;
   state.game?.destroy(); state.game=null;
-  if(state.pack){releaseFightAssets(state.pack);state.pack=null;}
+  if(state.pack){fightRuntime?.releaseFightAssets(state.pack);state.pack=null;}
   state.hud=null;state.paused=false;state.results=null;
   if(startMusic) state.audio?.startMusic();
 }

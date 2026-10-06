@@ -18,7 +18,23 @@
   <div class="rotate-notice" aria-hidden="true"><strong>GIRE O CELULAR</strong><span>BRUTAL BLOOD foi preparado para jogar na horizontal.</span></div>
   <script type="module" src="./js/app.js"></script>
   <script>
-    if ('serviceWorker' in navigator && location.protocol !== 'file:') addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      addEventListener('load', async () => {
+        const hadController = !!navigator.serviceWorker.controller;
+        try {
+          const registration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+          registration.update().catch(() => {});
+          setTimeout(() => sessionStorage.removeItem('bb-sw-reloaded'), 1500);
+          if (hadController) {
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+              if (sessionStorage.getItem('bb-sw-reloaded') === '1') return;
+              sessionStorage.setItem('bb-sw-reloaded', '1');
+              location.reload();
+            }, { once: true });
+          }
+        } catch {}
+      });
+    }
   </script>
 </body>
 </html>
