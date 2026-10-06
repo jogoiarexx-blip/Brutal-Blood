@@ -1,0 +1,10 @@
+{
+  "name": "BRUTAL BLOOD",
+  "short_name": "BRUTAL BLOOD",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "background_color": "#09070b",
+  "theme_color": "#09070b",
+  "icons": [{"src":"./icons/icon-180.png","sizes":"180x180","type":"image/png"}]
+}
